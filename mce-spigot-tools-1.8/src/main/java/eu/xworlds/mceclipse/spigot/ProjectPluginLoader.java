@@ -22,8 +22,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.net.URLClassLoader;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -211,8 +214,11 @@ public class ProjectPluginLoader implements PluginLoader
             final Constructor<? extends URLClassLoader> ctor = clazz.getDeclaredConstructor(JavaPluginLoader.class, ClassLoader.class, PluginDescriptionFile.class, File.class, File.class);
             final Properties props = fetchProperties(file);
             final File classesDir = new File(props.getProperty("classes")); //$NON-NLS-1$
+            final URL[] additionalClasses = fetchAdditionalUrlsFromProperties(props);
+            final ClassLoader appLoader = this.javaLoader.getClass().getClassLoader();
+            final ClassLoader parentLoader = additionalClasses.length == 0 ? appLoader : new URLClassLoader(additionalClasses, appLoader);
             ctor.setAccessible(true);
-            loader = ctor.newInstance(this.javaLoader, this.javaLoader.getClass().getClassLoader(), description, dataFolder, classesDir);
+            loader = ctor.newInstance(this.javaLoader, parentLoader, description, dataFolder, classesDir);
             
             final Field field = clazz.getDeclaredField("plugin"); //$NON-NLS-1$
             field.setAccessible(true);
@@ -225,6 +231,35 @@ public class ProjectPluginLoader implements PluginLoader
         this.loaders.put(description.getName(), loader);
         
         return plugin;
+    }
+    
+    /**
+     * Fetched additional cloasses urls from properties
+     * @param props
+     * @return classes urls
+     * @throws MalformedURLException
+     */
+    private URL[] fetchAdditionalUrlsFromProperties(Properties props) throws MalformedURLException
+    {
+        final List<URL> result = new ArrayList<>();
+        if (props.containsKey("cpsize")) //$NON-NLS-1$
+        {
+            final int size = Integer.parseInt(props.getProperty("cpsize")); //$NON-NLS-1$
+            for (int i = 0; i < size; i++)
+            {
+                final String type = props.getProperty("cptype" + i, "file"); //$NON-NLS-1$ //$NON-NLS-2$
+                switch (type)
+                {
+                    case "file": //$NON-NLS-1$
+                        result.add(new File(props.getProperty("cpfile" + i)).toURI().toURL()); //$NON-NLS-1$
+                        break;
+                    default:
+                        // silently ignore
+                        break;
+                }
+            }
+        }
+        return result.toArray(new URL[result.size()]);
     }
     
     @Override
