@@ -73,6 +73,8 @@ public class ProjectPluginLoader implements PluginLoader
     
     private JavaPluginLoader            javaLoader;
     
+    static final boolean debugcl = false;
+    
     /**
      * Constructor
      * 
@@ -231,8 +233,11 @@ public class ProjectPluginLoader implements PluginLoader
             }
             else
             {
+                final FakeClassLoader parentLoader = new FakeClassLoader(new URL[0], appLoader, this.javaLoader);
+                this.fakeLoaders.add(parentLoader);
                 ctor.setAccessible(true);
-                loader = ctor.newInstance(this.javaLoader, appLoader, description, dataFolder, classesDir);
+                loader = ctor.newInstance(this.javaLoader, parentLoader, description, dataFolder, classesDir);
+                parentLoader.injectPluginLoader(loader);
             }
             
             final Field field = clazz.getDeclaredField("plugin"); //$NON-NLS-1$
@@ -353,9 +358,9 @@ public class ProjectPluginLoader implements PluginLoader
             if ((name.startsWith("org.bukkit.")) || (name.startsWith("net.minecraft."))) {
                 throw new ClassNotFoundException(name);
             }
-//            System.out.println("!CL" + this + "! FIND CLASS " + name);
+            if (debugcl) System.out.println("!CL" + this + "! FIND CLASS " + name);
             Class result = (Class) this.classes.get(name);
-//            System.out.println("!CL" + this + "! RESULT " + result);
+            if (debugcl) System.out.println("!CL" + this + "! RESULT " + result);
 
             if (result == null) {
                 //boolean checkGlobal = cg && !this.recursionCheck.contains(name);
@@ -363,9 +368,9 @@ public class ProjectPluginLoader implements PluginLoader
                     try
                     {
                         // this.recursionCheck.add(name);
-//                        System.out.println("!CL" + this + "! INVOKE getClassByName ");
+                        if (debugcl) System.out.println("!CL" + this + "! INVOKE getClassByName ");
                         result = (Class<?>) this.getClassByNameMethod.invoke(this.loader, name);
-//                        System.out.println("!CL" + this + "! getClassByName returns " + result);
+                        if (debugcl) System.out.println("!CL" + this + "! getClassByName returns " + result);
                         if (result == null)
                         {
                             for (final FakeClassLoader fcl : fakeLoaders)
@@ -373,9 +378,9 @@ public class ProjectPluginLoader implements PluginLoader
                                 if (fcl == this) continue;
                                 try
                                 {
-//                                    System.out.println("!CL" + this + "! INVOKE " + fcl);
+                                    if (debugcl) System.out.println("!CL" + this + "! INVOKE " + fcl);
                                     result = fcl.findClass(name, false);
-//                                    System.out.println("!CL" + this + "! " + fcl + " returns " + result);
+                                    if (debugcl) System.out.println("!CL" + this + "! " + fcl + " returns " + result);
                                     break;
                                 }
                                 catch (ClassNotFoundException ex)
@@ -397,16 +402,16 @@ public class ProjectPluginLoader implements PluginLoader
                 
                 if (result == null)
                 {
-//                    System.out.println("!CL" + this + "! INVOKE super ");
+                    if (debugcl) System.out.println("!CL" + this + "! INVOKE super ");
                     result = super.findClass(name);
-//                    System.out.println("!CL" + this + "! super returns " + result);
+                    if (debugcl) System.out.println("!CL" + this + "! super returns " + result);
     
                     if (result != null) {
                         try
                         {
-//                            System.out.println("!CL" + this + "! INVOKE setClass");
+                            if (debugcl) System.out.println("!CL" + this + "! INVOKE setClass");
                             this.setClassMethod.invoke(this.loader, name, result);
-//                            System.out.println("!CL" + this + "! FNISHED setClass");
+                            if (debugcl) System.out.println("!CL" + this + "! FNISHED setClass");
                         }
                         catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e)
                         {
@@ -415,7 +420,7 @@ public class ProjectPluginLoader implements PluginLoader
                     }
                 }
 
-//                System.out.println("!CL" + this + "! classes.put ");
+                if (debugcl) System.out.println("!CL" + this + "! classes.put ");
                 this.classes.put(name, result);
             }
 
