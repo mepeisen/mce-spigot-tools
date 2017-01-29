@@ -1,5 +1,5 @@
 /*
-    This program is free software: you can redistribute it and/or modify
+	This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
@@ -18,25 +18,24 @@ package eu.xworlds.mceclipse.spigot;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.Validate;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
@@ -67,13 +66,12 @@ public class ProjectPluginLoader implements PluginLoader
     /** the plugin file filters. */
     private final Pattern[]             fileFilters = { Pattern.compile("\\.eclipseproject$") }; //$NON-NLS-1$
     
+    /** loaded classes. */
     private Map<String, Class<?>>       classes;
+    /** registered loaders. */
     private Map<String, URLClassLoader> loaders;
-    private final List<FakeClassLoader> fakeLoaders = new ArrayList<>();
-    
+    /** the java loader. */
     private JavaPluginLoader            javaLoader;
-    
-    static final boolean debugcl = false;
     
     /**
      * Constructor
@@ -110,6 +108,18 @@ public class ProjectPluginLoader implements PluginLoader
         Validate.notNull(this.javaLoader, "javaLoader cannot be null"); //$NON-NLS-1$
         Validate.notNull(this.classes, "classes cannot be null"); //$NON-NLS-1$
         Validate.notNull(this.loaders, "loaders cannot be null"); //$NON-NLS-1$
+        
+        final File fakePath = new File("plugins/__fakePath/eu/xworlds/mceclipse/spigot"); //$NON-NLS-1$
+        if (!fakePath.exists()) fakePath.mkdirs();
+        final File fakeFile = new File(fakePath, "FakePlugin.class"); //$NON-NLS-1$
+        try (final InputStream is = this.getClass().getClassLoader().getResourceAsStream("eu/xworlds/mceclipse/spigot/FakePlugin._class")) //$NON-NLS-1$
+        {
+            try (final FileOutputStream fos = new FileOutputStream(fakeFile))
+            {
+                IOUtils.copy(is, fos);
+            }
+        }
+        
     }
     
     @Override
@@ -225,19 +235,27 @@ public class ProjectPluginLoader implements PluginLoader
             final ClassLoader appLoader = this.javaLoader.getClass().getClassLoader();
             if (additionalClasses != null && additionalClasses.length > 0)
             {
-                final FakeClassLoader parentLoader = new FakeClassLoader(additionalClasses, appLoader, this.javaLoader);
-                this.fakeLoaders.add(parentLoader);
+                final String oldMain = description.getMain();
+                final Field mainField = description.getClass().getDeclaredField("main"); //$NON-NLS-1$
+                mainField.setAccessible(true);
+                mainField.set(description, "eu.xworlds.mceclipse.spigot.FakePlugin"); //$NON-NLS-1$
+                
                 ctor.setAccessible(true);
-                loader = ctor.newInstance(this.javaLoader, parentLoader, description, dataFolder, classesDir);
-                parentLoader.injectPluginLoader(loader);
+                final Map<String, URLClassLoader> oldList = new HashMap<>(this.loaders);
+                this.loaders.clear();
+                loader = ctor.newInstance(this.javaLoader, appLoader, description, dataFolder, new File("plugins/__fakePath")); //$NON-NLS-1$
+                this.loaders.putAll(oldList);
+                
+                mainField.set(description, oldMain);
+                final URL[] additional2 = new URL[additionalClasses.length + 1];
+                additional2[0] = classesDir.toURI().toURL();
+                System.arraycopy(additionalClasses, 0, additional2, 1, additionalClasses.length);
+                this.checkAndInject(loader, clazz, additional2, oldMain);
             }
             else
             {
-                final FakeClassLoader parentLoader = new FakeClassLoader(new URL[0], appLoader, this.javaLoader);
-                this.fakeLoaders.add(parentLoader);
                 ctor.setAccessible(true);
-                loader = ctor.newInstance(this.javaLoader, parentLoader, description, dataFolder, classesDir);
-                parentLoader.injectPluginLoader(loader);
+                loader = ctor.newInstance(this.javaLoader, appLoader, description, dataFolder, classesDir);
             }
             
             final Field field = clazz.getDeclaredField("plugin"); //$NON-NLS-1$
@@ -251,6 +269,33 @@ public class ProjectPluginLoader implements PluginLoader
         this.loaders.put(description.getName(), loader);
         
         return plugin;
+    }
+    
+    /**
+     * check and inject
+     * @param cl
+     * @param clazz
+     * @param additionalClasses
+     * @param main
+     * @throws Exception
+     */
+    private void checkAndInject(URLClassLoader cl, Class<?> clazz, URL[] additionalClasses, String main) throws Exception
+    {
+        this.classes.remove("eu.xworlds.mceclipse.spigot.FakePlugin"); //$NON-NLS-1$
+        @SuppressWarnings("resource")
+        final URLClassLoader dummy = new URLClassLoader(additionalClasses, cl.getParent());
+        final Field ucpField = URLClassLoader.class.getDeclaredField("ucp"); //$NON-NLS-1$
+        ucpField.setAccessible(true);
+        ucpField.set(cl, ucpField.get(dummy));
+        
+        final Class<?> pluginClazz = cl.loadClass(main);
+        final Field pluginField = clazz.getDeclaredField("plugin"); //$NON-NLS-1$
+        pluginField.setAccessible(true);
+        pluginField.set(cl, null);
+        final Field pluginInitField = clazz.getDeclaredField("pluginInit"); //$NON-NLS-1$
+        pluginInitField.setAccessible(true);
+        pluginInitField.set(cl, null);
+        pluginField.set(cl, pluginClazz.newInstance());
     }
     
     /**
@@ -301,132 +346,6 @@ public class ProjectPluginLoader implements PluginLoader
         {
             throw new InvalidDescriptionException(ex);
         }
-    }
-    
-    private final class FakeClassLoader extends URLClassLoader
-    {
-        private URLClassLoader pluginLoader;
-        
-        private Map<String, Class<?>> classes = new ConcurrentHashMap();
-        
-        private final JavaPluginLoader loader;
-        
-        private final Method setClassMethod;
-
-        private Method getClassByNameMethod;
-        
-        private Set<String> recursionCheck = new HashSet<>();
-
-        /**
-         * @param arg0
-         * @param arg1
-         * @throws SecurityException 
-         * @throws NoSuchMethodException 
-         */
-        public FakeClassLoader(URL[] arg0, ClassLoader arg1, JavaPluginLoader loader) throws NoSuchMethodException, SecurityException
-        {
-            super(arg0, arg1);
-            this.loader = loader;
-            this.setClassMethod = this.loader.getClass().getDeclaredMethod("setClass", String.class, Class.class);
-            this.setClassMethod.setAccessible(true);
-            this.getClassByNameMethod = this.loader.getClass().getDeclaredMethod("getClassByName", String.class);
-            this.getClassByNameMethod.setAccessible(true);
-        }
-        
-        public void injectPluginLoader(URLClassLoader pluginLoader)
-        {
-            this.pluginLoader = pluginLoader;
-            try
-            {
-                final Field classesField = pluginLoader.getClass().getDeclaredField("classes");
-                classesField.setAccessible(true);
-                final Map<String, Class<?>> classes = (Map<String, Class<?>>) classesField.get(pluginLoader);
-                classes.putAll(this.classes);
-                this.classes = classes;
-            }
-            catch (Exception ex)
-            {
-                throw new IllegalStateException(ex);
-            }
-        }
-
-        protected Class<?> findClass(String name) throws ClassNotFoundException {
-            return findClass(name, true);
-        }
-
-        Class<?> findClass(String name, boolean checkGlobal) throws ClassNotFoundException {
-            if ((name.startsWith("org.bukkit.")) || (name.startsWith("net.minecraft."))) {
-                throw new ClassNotFoundException(name);
-            }
-            if (debugcl) System.out.println("!CL" + this + "! FIND CLASS " + name);
-            Class result = (Class) this.classes.get(name);
-            if (debugcl) System.out.println("!CL" + this + "! RESULT " + result);
-
-            if (result == null) {
-                //boolean checkGlobal = cg && !this.recursionCheck.contains(name);
-                if (checkGlobal) {
-                    try
-                    {
-                        // this.recursionCheck.add(name);
-                        if (debugcl) System.out.println("!CL" + this + "! INVOKE getClassByName ");
-                        result = (Class<?>) this.getClassByNameMethod.invoke(this.loader, name);
-                        if (debugcl) System.out.println("!CL" + this + "! getClassByName returns " + result);
-                        if (result == null)
-                        {
-                            for (final FakeClassLoader fcl : fakeLoaders)
-                            {
-                                if (fcl == this) continue;
-                                try
-                                {
-                                    if (debugcl) System.out.println("!CL" + this + "! INVOKE " + fcl);
-                                    result = fcl.findClass(name, false);
-                                    if (debugcl) System.out.println("!CL" + this + "! " + fcl + " returns " + result);
-                                    break;
-                                }
-                                catch (ClassNotFoundException ex)
-                                {
-                                    // ignore
-                                }
-                            }
-                        }
-                    }
-                    catch (@SuppressWarnings("unused") IllegalAccessException | IllegalArgumentException | InvocationTargetException e)
-                    {
-                        // silently ignore
-                    }
-                    finally
-                    {
-                        this.recursionCheck.remove(name);
-                    }
-                }
-                
-                if (result == null)
-                {
-                    if (debugcl) System.out.println("!CL" + this + "! INVOKE super ");
-                    result = super.findClass(name);
-                    if (debugcl) System.out.println("!CL" + this + "! super returns " + result);
-    
-                    if (result != null) {
-                        try
-                        {
-                            if (debugcl) System.out.println("!CL" + this + "! INVOKE setClass");
-                            this.setClassMethod.invoke(this.loader, name, result);
-                            if (debugcl) System.out.println("!CL" + this + "! FNISHED setClass");
-                        }
-                        catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e)
-                        {
-                            throw new ClassNotFoundException("problems setting global class", e);
-                        }
-                    }
-                }
-
-                if (debugcl) System.out.println("!CL" + this + "! classes.put ");
-                this.classes.put(name, result);
-            }
-
-            return result;
-        }
-        
     }
     
 }
