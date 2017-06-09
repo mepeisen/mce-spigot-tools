@@ -19,5 +19,6 @@
   	<module>mce-spigot-tools-1.10.2</module>
   	<module>mce-spigot-tools-1.11</module>
   	<module>mce-spigot-tools-1.11.2</module>
+  	<module>mce-spigot-tools-1.12</module>
   </modules>
 </project>
